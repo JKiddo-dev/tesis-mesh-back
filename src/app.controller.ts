@@ -1,4 +1,4 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { MessagePattern, Payload, Ctx, MqttContext } from '@nestjs/microservices';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -12,6 +12,25 @@ export class AppController {
     private readonly eventosGateway: EventosGateway,
     @InjectModel(Telemetry.name) private telemetryModel: Model<TelemetryDocument>
   ) {}
+
+  @Get('telemetry/history')
+  async getTelemetryHistory() {
+    console.log('[HTTP] Petición GET recibida en /telemetry/history');
+    try {
+      const historial = await this.telemetryModel.find({ 
+        tipoPaquete: 'position',
+        latitud: { $ne: null },
+        longitud: { $ne: null }
+      })
+      .sort({ createdAt: 1 }) // 1 = ascendente (del más antiguo al mas nuevo)
+      .exec();
+
+      return historial;
+    } catch (error) {
+      console.log('Error obteniendo historial de la BD', error);
+      return { error: 'No se pudo obtener el historial' };
+    }
+  }
 
   @MessagePattern('tesis/utem/mesh/#')
   async handleMeshtasticTraffic(@Payload() data: any, @Ctx() context: MqttContext) { 
@@ -50,7 +69,6 @@ export class AppController {
           mensajeTexto = payloadParaFrontend.payload.text;
         }
 
-        // Guardamos en MongoDB
         const nuevaTelemetria = await this.telemetryModel.create({
           nodoId: payloadParaFrontend.fromStr || payloadParaFrontend.from || 'Desconocido',
           tipoPaquete,
