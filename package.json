@@ -23,9 +23,11 @@
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/microservices": "^11.1.24",
+    "@nestjs/mongoose": "^11.0.4",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/platform-socket.io": "^11.1.24",
     "@nestjs/websockets": "^11.1.24",
+    "mongoose": "^9.6.3",
     "mqtt": "^5.15.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"

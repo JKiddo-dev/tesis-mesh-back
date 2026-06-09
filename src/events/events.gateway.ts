@@ -16,7 +16,6 @@ export class EventosGateway implements OnGatewayConnection, OnGatewayDisconnect 
     console.log(`Frontend desconectado: ${client.id}`);
   }
 
-  // Esta función la llamaremos desde nuestro controlador MQTT
   emitirMensajeMesh(topico: string, payload: any) {
     this.server.emit('nuevoMensajeMesh', { topico, payload });
   }
