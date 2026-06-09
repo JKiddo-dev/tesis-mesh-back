@@ -13,6 +13,18 @@ export class AppController {
     @InjectModel(Telemetry.name) private telemetryModel: Model<TelemetryDocument>
   ) {}
 
+  @Get('telemetry/nodes')
+  async getActiveNodes() {
+    console.log('[HTTP] Petición GET recibida en /telemtry/nodes');
+    try {
+      const nodosUnicos = await this.telemetryModel.distinct('nodoId').exec();
+      return nodosUnicos;
+    } catch (error) {
+      console.log('Error obteniendo lista de nodos únicos', error);
+      return [];
+    }
+  }
+
   @Get('telemetry/history')
   async getTelemetryHistory() {
     console.log('[HTTP] Petición GET recibida en /telemetry/history');
