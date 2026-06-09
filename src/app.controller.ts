@@ -43,6 +43,22 @@ export class AppController {
       return { error: 'No se pudo obtener el historial' };
     }
   }
+  
+  @Get('telemetry/messages')
+  async getMessagesHistory() {
+    console.log('[HTTP] Petición GET recibida en /telemetry/messages');
+    try {
+      const mensajes = await this.telemetryModel.find()
+        .sort({ createdAt: -1 }) // Los más nuevos primero
+        .limit(50)
+        .exec();
+
+      return mensajes.reverse();
+    } catch (error) {
+      console.log('Error obteniendo historial de mensajes', error);
+      return [];
+    }
+  }
 
   @MessagePattern('tesis/utem/mesh/#')
   async handleMeshtasticTraffic(@Payload() data: any, @Ctx() context: MqttContext) { 
