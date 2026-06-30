@@ -1,5 +1,5 @@
-import { Controller, Get } from '@nestjs/common';
-import { MessagePattern, Payload, Ctx, MqttContext } from '@nestjs/microservices';
+import { Controller, Get, Delete, Param, Post, Body } from '@nestjs/common';
+import { MessagePattern, Payload, Ctx, MqttContext, Client, ClientProxy, Transport } from '@nestjs/microservices';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { EventosGateway } from './events/events.gateway'; 
@@ -7,6 +7,9 @@ import { Telemetry, TelemetryDocument } from './schemas/telemetry.schema';
 
 @Controller()
 export class AppController {
+
+  @Client({ transport: Transport.MQTT, options: { url: 'mqtt://broker.emqx.io:1883' } })
+  mqttClient!: ClientProxy;
   
   constructor(
     private readonly eventosGateway: EventosGateway,
@@ -60,6 +63,92 @@ export class AppController {
     }
   }
 
+  @Delete('telemetry/nodes/:id')
+  async deleteNode(@Param('id') id: string) {
+    console.log(`[HTTP] Petición DELETE recibida para borrar el nodo: ${id}`);
+    try {
+      const resultado = await this.telemetryModel.deleteMany({ nodoId: id }).exec();
+      
+      console.log(`[MongoDB] Se borraron ${resultado.deletedCount} registros del nodo ${id}`);
+      
+      return { 
+        exito: true,
+        mensaje: `Se eliminaron ${resultado.deletedCount} mensajes/posiciones del nodo ${id}` 
+      };
+    } catch (error) {
+      console.log(`Error eliminando el nodo ${id}`, error);
+      return { 
+        exito: false, 
+        error: 'Error interno al intentar eliminar el nodo de la base de datos' 
+      };
+    }
+  }
+
+  @Get('telemetry/analytics')
+  async getAnalytics() {
+    console.log('[HTTP] Petición GET recibida en /telemetry/analytics');
+    try {
+      const conteoPaquetes = await this.telemetryModel.aggregate([
+        { $group: { _id: "$tipoPaquete", cantidad: { $sum: 1 } } },
+        { $project: { name: "$_id", value: "$cantidad", _id: 0 } }
+      ]);
+
+      const rssiPorNodo = await this.telemetryModel.aggregate([
+        { $match: { "metadatos.rxRssi": { $exists: true, $ne: null } } },
+        { $group: { 
+            _id: "$nodoId", 
+            promedioRssi: { $avg: "$metadatos.rxRssi" },
+            totalPaquetes: { $sum: 1 }
+          } 
+        },
+        { $project: { 
+            nodo: "$_id", 
+            rssi: { $round: ["$promedioRssi", 2] }, 
+            paquetes: "$totalPaquetes", 
+            _id: 0 
+          } 
+        },
+        { $sort: { paquetes: -1 } }, 
+        { $limit: 10 } 
+      ]);
+
+      return {
+        conteoPaquetes,
+        rssiPorNodo
+      };
+    } catch (error) {
+      console.log('Error obteniendo analíticas de la BD', error);
+      return { error: 'No se pudieron obtener las analíticas' };
+    }
+  }
+  
+  @Post('telemetry/send')
+  async enviarMensajeMesh(@Body() body: { mensaje: string, nodoDestino?: string }) {
+    console.log(`[HTTP] Petición POST para enviar mensaje: "${body.mensaje}"`);
+    try {
+      const payloadMeshtastic = {
+        type: "sendtext",
+        payload: body.mensaje,
+        to: body.nodoDestino ? parseInt(body.nodoDestino) : 4294967295, 
+        from: 1234567890, 
+        channel: 0
+      };
+
+      
+      const topicoEnvio = 'tesis/utem/mesh';
+
+      this.mqttClient.emit(topicoEnvio, payloadMeshtastic);
+      
+      console.log(`[MQTT] Mensaje inyectado al tópico ${topicoEnvio} en broker.emqx.io`);
+      return { exito: true, mensaje: "Mensaje publicado en la red Mesh" };
+      
+    } catch (error) {
+      console.log('Error enviando mensaje MQTT', error);
+      return { exito: false, error: 'No se pudo enviar el mensaje' };
+    }
+  }
+
+
   @MessagePattern('tesis/utem/mesh/#')
   async handleMeshtasticTraffic(@Payload() data: any, @Ctx() context: MqttContext) { 
     const topic = context.getTopic();
@@ -98,7 +187,7 @@ export class AppController {
         }
 
         const nuevaTelemetria = await this.telemetryModel.create({
-          nodoId: payloadParaFrontend.fromStr || payloadParaFrontend.from || 'Desconocido',
+          nodoId: payloadParaFrontend.sender || payloadParaFrontend.fromStr || String(payloadParaFrontend.from) ||'Desconocido',
           tipoPaquete,
           latitud,
           longitud,
