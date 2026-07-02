@@ -1,9 +1,10 @@
-import { Controller, Get, Delete, Param, Post, Body } from '@nestjs/common';
+import { Controller, Get, Delete, Param, Post, Body, UseGuards } from '@nestjs/common';
 import { MessagePattern, Payload, Ctx, MqttContext, Client, ClientProxy, Transport } from '@nestjs/microservices';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { EventosGateway } from './events/events.gateway'; 
 import { Telemetry, TelemetryDocument } from './schemas/telemetry.schema'; 
+import { AuthGuard } from '@nestjs/passport';
 
 @Controller()
 export class AppController {
@@ -16,6 +17,7 @@ export class AppController {
     @InjectModel(Telemetry.name) private telemetryModel: Model<TelemetryDocument>
   ) {}
 
+  @UseGuards(AuthGuard('jwt'))
   @Get('telemetry/nodes')
   async getActiveNodes() {
     console.log('[HTTP] Petición GET recibida en /telemtry/nodes');
@@ -28,6 +30,7 @@ export class AppController {
     }
   }
 
+  @UseGuards(AuthGuard('jwt'))
   @Get('telemetry/history')
   async getTelemetryHistory() {
     console.log('[HTTP] Petición GET recibida en /telemetry/history');
@@ -47,6 +50,7 @@ export class AppController {
     }
   }
   
+  @UseGuards(AuthGuard('jwt'))
   @Get('telemetry/messages')
   async getMessagesHistory() {
     console.log('[HTTP] Petición GET recibida en /telemetry/messages');
@@ -63,6 +67,7 @@ export class AppController {
     }
   }
 
+  @UseGuards(AuthGuard('jwt'))
   @Delete('telemetry/nodes/:id')
   async deleteNode(@Param('id') id: string) {
     console.log(`[HTTP] Petición DELETE recibida para borrar el nodo: ${id}`);
@@ -84,6 +89,7 @@ export class AppController {
     }
   }
 
+  @UseGuards(AuthGuard('jwt'))
   @Get('telemetry/analytics')
   async getAnalytics() {
     console.log('[HTTP] Petición GET recibida en /telemetry/analytics');
@@ -122,6 +128,7 @@ export class AppController {
     }
   }
   
+  @UseGuards(AuthGuard('jwt'))
   @Post('telemetry/send')
   async enviarMensajeMesh(@Body() body: { mensaje: string, nodoDestino?: string }) {
     console.log(`[HTTP] Petición POST para enviar mensaje: "${body.mensaje}"`);
