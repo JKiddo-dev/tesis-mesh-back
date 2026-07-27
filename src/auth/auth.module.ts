@@ -10,7 +10,7 @@ import { JwtStrategy } from './jwt.strategy';
   imports: [
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
     JwtModule.register({
-      secret: 'super-secreto-tesis-utem-2026', // Recordar cambiar a.env
+      secret: process.env.JWT_SECRET || 'fallback-secreto-local',
       signOptions: { expiresIn: '8h' }, 
     }),
   ],

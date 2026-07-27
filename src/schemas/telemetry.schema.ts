@@ -22,6 +22,7 @@ export class Telemetry {
 
   @Prop({ type: Object })
   metadatos?: Record<string, any>;
+
 }
 
 export const TelemetrySchema = SchemaFactory.createForClass(Telemetry);

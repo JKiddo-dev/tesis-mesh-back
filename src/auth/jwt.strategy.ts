@@ -8,8 +8,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: 'super-secreto-tesis-utem-2026', 
-    });
+      secretOrKey: process.env.JWT_SECRET || 'fallback-secreto-local'});
   }
 
   async validate(payload: any) {

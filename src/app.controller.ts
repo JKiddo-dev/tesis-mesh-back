@@ -1,98 +1,144 @@
-import { Controller, Get, Delete, Param, Post, Body, UseGuards } from '@nestjs/common';
-import { MessagePattern, Payload, Ctx, MqttContext, Client, ClientProxy, Transport } from '@nestjs/microservices';
+import { Controller, Get, Delete, Param, Post, Body, UseGuards, Put, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { EventosGateway } from './events/events.gateway'; 
 import { Telemetry, TelemetryDocument } from './schemas/telemetry.schema'; 
+import { Settings, SettingsDocument } from './schemas/settings.schema';
 import { AuthGuard } from '@nestjs/passport';
+import * as mqtt from 'mqtt'; 
+
+import { Roles } from './auth/roles.decorator'; 
+import { RolesGuard } from './auth/roles.guard';
 
 @Controller()
-export class AppController {
+export class AppController implements OnModuleInit {
 
-  @Client({ transport: Transport.MQTT, options: { url: 'mqtt://broker.emqx.io:1883' } })
-  mqttClient!: ClientProxy;
-  
+  private mqttClient: mqtt.MqttClient | null = null;
+  private topicoActual: string = '';
+
   constructor(
     private readonly eventosGateway: EventosGateway,
-    @InjectModel(Telemetry.name) private telemetryModel: Model<TelemetryDocument>
+    @InjectModel(Telemetry.name) private telemetryModel: Model<TelemetryDocument>,
+    @InjectModel(Settings.name) private settingsModel: Model<SettingsDocument>
   ) {}
+
+  async onModuleInit() {
+    await this.inicializarMqttDinámico();
+  }
+
+  async inicializarMqttDinámico() {
+    let config = await this.settingsModel.findOne().exec();
+    if (!config) {
+      console.log('[MongoDB] Creando configuración por defecto...');
+      config = await this.settingsModel.create({});
+    }
+    this.conectarBroker(config.mqttBrokerUrl, config.mqttTopic);
+  }
+
+  conectarBroker(url: string, topic: string, username?: string, password?: string) {
+    if (this.mqttClient) {
+      console.log('[MQTT] Desconectando cliente anterior...');
+      this.mqttClient.end(true); 
+    }
+
+    console.log(`[MQTT] Conectando a: ${url}...`);
+    const options: mqtt.IClientOptions = {};
+    if (username) options.username = username;
+    if (password) options.password = password;
+
+    this.mqttClient = mqtt.connect(url, options);
+    this.topicoActual = topic;
+    this.mqttClient.on('connect', () => {
+      console.log(`[MQTT] Conectado. Suscribiendo al tópico: ${topic}`);
+      this.mqttClient?.subscribe(topic, (err) => {
+        if (err) console.error('[MQTT] Error al suscribirse:', err);
+      });
+    });
+
+    this.mqttClient.on('message', (incomingTopic, messageBuffer) => {
+      this.handleMeshtasticTraffic(incomingTopic, messageBuffer);
+    });
+
+    this.mqttClient.on('error', (err) => {
+      console.error('[MQTT] Error de conexión:', err.message);
+    });
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('settings')
+  async getSettings() {
+    let config = await this.settingsModel.findOne().exec();
+    if (!config) config = await this.settingsModel.create({});
+    return config;
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('Admin') // Solo administradores pueden modificar la configuración de la red
+  @Put('settings')
+  async updateSettings(@Body() body: Partial<Settings>) {
+    let config = await this.settingsModel.findOne().exec();
+    if (!config) config = await this.settingsModel.create({});
+
+    const requiereReconexion = 
+      (body.mqttBrokerUrl && body.mqttBrokerUrl !== config.mqttBrokerUrl) || 
+      (body.mqttTopic && body.mqttTopic !== config.mqttTopic);
+
+    const updatedConfig = await this.settingsModel.findByIdAndUpdate(config._id, body, { new: true }).exec();
+
+    if (requiereReconexion && updatedConfig) {
+      console.log('[SETTINGS] Cambio detectado en MQTT. Reiniciando conexión en caliente...');
+      this.conectarBroker(updatedConfig.mqttBrokerUrl, updatedConfig.mqttTopic);
+    }
+
+    return { exito: true, settings: updatedConfig };
+  }
 
   @UseGuards(AuthGuard('jwt'))
   @Get('telemetry/nodes')
   async getActiveNodes() {
-    console.log('[HTTP] Petición GET recibida en /telemtry/nodes');
     try {
-      const nodosUnicos = await this.telemetryModel.distinct('nodoId').exec();
-      return nodosUnicos;
-    } catch (error) {
-      console.log('Error obteniendo lista de nodos únicos', error);
-      return [];
-    }
+      return await this.telemetryModel.distinct('nodoId').exec();
+    } catch (error) { return []; }
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Get('telemetry/history')
   async getTelemetryHistory() {
-    console.log('[HTTP] Petición GET recibida en /telemetry/history');
     try {
-      const historial = await this.telemetryModel.find({ 
-        tipoPaquete: 'position',
-        latitud: { $ne: null },
-        longitud: { $ne: null }
-      })
-      .sort({ createdAt: 1 }) // 1 = ascendente (del más antiguo al mas nuevo)
-      .exec();
-
-      return historial;
-    } catch (error) {
-      console.log('Error obteniendo historial de la BD', error);
-      return { error: 'No se pudo obtener el historial' };
-    }
+      return await this.telemetryModel.find({ tipoPaquete: 'POSICION', latitud: { $ne: null } }).sort({ createdAt: 1 }).exec();
+    } catch (error) { return { error: 'Error BD' }; }
   }
   
   @UseGuards(AuthGuard('jwt'))
   @Get('telemetry/messages')
   async getMessagesHistory() {
-    console.log('[HTTP] Petición GET recibida en /telemetry/messages');
     try {
-      const mensajes = await this.telemetryModel.find()
-        .sort({ createdAt: -1 }) // Los más nuevos primero
-        .limit(50)
-        .exec();
-
-      return mensajes.reverse();
-    } catch (error) {
-      console.log('Error obteniendo historial de mensajes', error);
-      return [];
-    }
+      const msjs = await this.telemetryModel.find().sort({ createdAt: -1 }).limit(50).exec();
+      return msjs.reverse();
+    } catch (error) { return []; }
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Delete('telemetry/nodes/:id')
   async deleteNode(@Param('id') id: string) {
-    console.log(`[HTTP] Petición DELETE recibida para borrar el nodo: ${id}`);
     try {
-      const resultado = await this.telemetryModel.deleteMany({ nodoId: id }).exec();
-      
-      console.log(`[MongoDB] Se borraron ${resultado.deletedCount} registros del nodo ${id}`);
-      
-      return { 
-        exito: true,
-        mensaje: `Se eliminaron ${resultado.deletedCount} mensajes/posiciones del nodo ${id}` 
-      };
-    } catch (error) {
-      console.log(`Error eliminando el nodo ${id}`, error);
-      return { 
-        exito: false, 
-        error: 'Error interno al intentar eliminar el nodo de la base de datos' 
-      };
-    }
+      const res = await this.telemetryModel.deleteMany({ nodoId: id }).exec();
+      return { exito: true, mensaje: `Borrados ${res.deletedCount} registros` };
+    } catch (error) { return { exito: false, error: 'Error BD' }; }
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Delete('telemetry/clear-all')
+  async clearAllData() {
+    try {
+      const res = await this.telemetryModel.deleteMany({}).exec();
+      return { exito: true, mensaje: `Borrados ${res.deletedCount} registros` };
+    } catch (error) { return { exito: false, error: 'Error BD' }; }
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Get('telemetry/analytics')
   async getAnalytics() {
-    console.log('[HTTP] Petición GET recibida en /telemetry/analytics');
     try {
       const conteoPaquetes = await this.telemetryModel.aggregate([
         { $group: { _id: "$tipoPaquete", cantidad: { $sum: 1 } } },
@@ -100,101 +146,79 @@ export class AppController {
       ]);
 
       const rssiPorNodo = await this.telemetryModel.aggregate([
-        { $match: { "metadatos.rxRssi": { $exists: true, $ne: null } } },
-        { $group: { 
-            _id: "$nodoId", 
-            promedioRssi: { $avg: "$metadatos.rxRssi" },
-            totalPaquetes: { $sum: 1 }
-          } 
-        },
-        { $project: { 
-            nodo: "$_id", 
-            rssi: { $round: ["$promedioRssi", 2] }, 
-            paquetes: "$totalPaquetes", 
-            _id: 0 
-          } 
-        },
-        { $sort: { paquetes: -1 } }, 
-        { $limit: 10 } 
+        { $match: { "metadatos.rssi": { $exists: true, $ne: null } } },
+        { $group: { _id: "$nodoId", promedioRssi: { $avg: "$metadatos.rssi" }, totalPaquetes: { $sum: 1 } } },
+        { $project: { nodo: "$_id", rssi: { $round: ["$promedioRssi", 2] }, paquetes: "$totalPaquetes", _id: 0 } },
+        { $sort: { paquetes: -1 } }, { $limit: 10 } 
       ]);
 
-      return {
-        conteoPaquetes,
-        rssiPorNodo
-      };
-    } catch (error) {
-      console.log('Error obteniendo analíticas de la BD', error);
-      return { error: 'No se pudieron obtener las analíticas' };
-    }
+      return { conteoPaquetes, rssiPorNodo };
+    } catch (error) { return { error: 'Error BD' }; }
   }
   
   @UseGuards(AuthGuard('jwt'))
   @Post('telemetry/send')
   async enviarMensajeMesh(@Body() body: { mensaje: string, nodoDestino?: string }) {
-    console.log(`[HTTP] Petición POST para enviar mensaje: "${body.mensaje}"`);
     try {
+      if (!this.mqttClient || !this.mqttClient.connected) {
+        return { exito: false, error: 'No hay conexión activa con el broker MQTT' };
+      }
+
       const payloadMeshtastic = {
         type: "sendtext",
         payload: body.mensaje,
         to: body.nodoDestino ? parseInt(body.nodoDestino) : 4294967295, 
         from: 1234567890, 
-        channel: 0
+        channel: 0 
       };
 
+      const topicoEnvio = this.topicoActual.replace('/#', '');
+      this.mqttClient.publish(topicoEnvio, JSON.stringify(payloadMeshtastic));
       
-      const topicoEnvio = 'tesis/utem/mesh';
-
-      this.mqttClient.emit(topicoEnvio, payloadMeshtastic);
-      
-      console.log(`[MQTT] Mensaje inyectado al tópico ${topicoEnvio} en broker.emqx.io`);
-      return { exito: true, mensaje: "Mensaje publicado en la red Mesh" };
+      console.log(`[MQTT] Mensaje inyectado al tópico ${topicoEnvio}`);
+      return { exito: true, mensaje: "Mensaje publicado" };
       
     } catch (error) {
-      console.log('Error enviando mensaje MQTT', error);
       return { exito: false, error: 'No se pudo enviar el mensaje' };
     }
   }
 
-
-  @MessagePattern('tesis/utem/mesh/#')
-  async handleMeshtasticTraffic(@Payload() data: any, @Ctx() context: MqttContext) { 
-    const topic = context.getTopic();
-    console.log(`\n[MQTT PACKET RECEIVED] en el tópico: ${topic}`);
-    
+  async handleMeshtasticTraffic(topic: string, data: Buffer) { 
     try {
-      let payloadParaFrontend: any = null;
+      if (topic.includes('/e/') || topic.includes('/c/')) return; 
 
-      if (topic.includes('/e/') || topic.includes('/c/')) {
-        console.log('Ignorando paquete binario (Protobuf).');
-        return; 
-      }
-
-      if (typeof data === 'object' && !Buffer.isBuffer(data)) {
-        payloadParaFrontend = data;
-        // console.log('Contenido JSON:', JSON.stringify(payloadParaFrontend, null, 2));
-      } 
-      else {
-        const stringData = data.toString();
-        payloadParaFrontend = JSON.parse(stringData);
-        // console.log('Contenido Parseado:', JSON.stringify(payloadParaFrontend, null, 2));
-      }
+      const stringData = data.toString();
+      const payloadParaFrontend = JSON.parse(stringData);
 
       if (payloadParaFrontend) {
-        
-        let tipoPaquete = payloadParaFrontend.type || 'unknown';
+        const rawType = payloadParaFrontend.type || (payloadParaFrontend.decoded?.portnum) || 'unknown';
+        let tipoPaquete = 'OTRO';
         let latitud: number | undefined;
         let longitud: number | undefined;
         let mensajeTexto: string | undefined;
 
-        if (tipoPaquete === 'position' && payloadParaFrontend.payload) {
-          latitud = payloadParaFrontend.payload.latitude_i / 10000000;
-          longitud = payloadParaFrontend.payload.longitude_i / 10000000;
-        } else if (tipoPaquete === 'text' && payloadParaFrontend.payload) {
-          mensajeTexto = payloadParaFrontend.payload.text;
+        const rawTypeLower = String(rawType).toLowerCase();
+
+        if (rawTypeLower === 'text' || rawType === 'TEXT_MESSAGE_APP' || rawType == 1) {
+          tipoPaquete = 'TEXTO';
+          mensajeTexto = payloadParaFrontend.payload?.text || (typeof payloadParaFrontend.payload === 'string' ? payloadParaFrontend.payload : undefined);
+        } else if (rawTypeLower === 'sendtext') {
+          tipoPaquete = 'TEXTO'; 
+          mensajeTexto = payloadParaFrontend.payload;
+        } else if (rawTypeLower === 'position' || rawType === 'POSITION_APP' || rawType == 3) {
+          tipoPaquete = 'POSICION';
+          if (payloadParaFrontend.payload?.latitude_i) {
+            latitud = payloadParaFrontend.payload.latitude_i / 10000000;
+            longitud = payloadParaFrontend.payload.longitude_i / 10000000;
+          }
+        } else if (rawTypeLower === 'telemetry' || rawType === 'TELEMETRY_APP' || rawType == 67) {
+          tipoPaquete = 'TELEMETRIA';
+        } else if (rawTypeLower === 'nodeinfo' || rawType === 'NODEINFO_APP' || rawType == 4) {
+          tipoPaquete = 'NODEINFO'; 
         }
 
         const nuevaTelemetria = await this.telemetryModel.create({
-          nodoId: payloadParaFrontend.sender || payloadParaFrontend.fromStr || String(payloadParaFrontend.from) ||'Desconocido',
+          nodoId: payloadParaFrontend.sender || payloadParaFrontend.fromStr || String(payloadParaFrontend.from) || 'Desconocido',
           tipoPaquete,
           latitud,
           longitud,
@@ -202,14 +226,9 @@ export class AppController {
           metadatos: payloadParaFrontend,
         });
         
-        console.log(`[MongoDB] Datos guardados con ID: ${nuevaTelemetria._id}`);
-
-        this.eventosGateway.emitirMensajeMesh(topic, payloadParaFrontend);
-        console.log('Retransmitido al Frontend vía WebSockets');
+        this.eventosGateway.emitirMensajeMesh(topic, nuevaTelemetria);
       }
-
     } catch (error) {
-      console.log('Error procesando el paquete MQTT o guardando en BD. Ignorando...', error);
     }
   }
 }

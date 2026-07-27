@@ -7,16 +7,6 @@ async function bootstrap() {
 
   app.enableCors();
 
-  app.connectMicroservice<MicroserviceOptions>({
-    transport: Transport.MQTT,
-    options: {
-      url: 'mqtt://broker.emqx.io:1883', // Broker temporal, revisar otras opciones.
-    },
-  });
-
-  await app.startAllMicroservices();
-  console.log('MQTT conectado exitosamente');
-
   await app.listen(4000);
   console.log('API REST corriendo en: http://localhost:4000');
 }
