@@ -61,6 +61,10 @@ export class AuthService {
     return this.userModel.find().select('-passwordHash').exec(); 
   }
 
+  async obtenerDirectorioNodos() {
+    return this.userModel.find({ nodoId: { $exists: true, $ne: null } }).select('nombre nodoId rol').exec();
+  }
+
   async crearUsuario(data: any) {
     const salt = await bcrypt.genSalt(10);
     const hash = await bcrypt.hash(data.password, salt);

@@ -111,6 +111,22 @@ describe('AuthService', () => {
     });
   });
 
+  describe('obtenerDirectorioNodos', () => {
+    it('should return users with assigned radio nodes for directory listing', async () => {
+      const mockDirectory = [
+        { nombre: 'Carlos Ruiz', nodoId: 'node_100', rol: 'Usuario' },
+      ];
+      mockUserModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+          exec: jest.fn().mockResolvedValue(mockDirectory),
+        }),
+      });
+
+      const directory = await service.obtenerDirectorioNodos();
+      expect(directory).toEqual(mockDirectory);
+    });
+  });
+
   describe('crearUsuario', () => {
     it('should create user with assigned node and default role Usuario if not provided', async () => {
       const userData = {

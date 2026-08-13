@@ -18,6 +18,12 @@ export class AuthController {
     return this.authService.crearUsuarioInicial(body);
   }
 
+  @UseGuards(AuthGuard('jwt'))
+  @Get('node-directory')
+  async getNodeDirectory() {
+    return this.authService.obtenerDirectorioNodos();
+  }
+
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles('Admin', 'Operador')
   @Get('users')

@@ -10,6 +10,7 @@ describe('AuthController', () => {
     login: jest.fn(),
     crearUsuarioInicial: jest.fn(),
     obtenerUsuarios: jest.fn(),
+    obtenerDirectorioNodos: jest.fn(),
     crearUsuario: jest.fn(),
     actualizarUsuario: jest.fn(),
     eliminarUsuario: jest.fn(),
@@ -54,6 +55,17 @@ describe('AuthController', () => {
       const result = await controller.getUsers();
       expect(service.obtenerUsuarios).toHaveBeenCalled();
       expect(result).toBe(expectedUsers);
+    });
+  });
+
+  describe('getNodeDirectory', () => {
+    it('should call AuthService.obtenerDirectorioNodos and return mapping', async () => {
+      const expectedDirectory = [{ nombre: 'Juan', nodoId: 'node_1' }];
+      mockAuthService.obtenerDirectorioNodos.mockResolvedValue(expectedDirectory);
+
+      const result = await controller.getNodeDirectory();
+      expect(service.obtenerDirectorioNodos).toHaveBeenCalled();
+      expect(result).toBe(expectedDirectory);
     });
   });
 });
