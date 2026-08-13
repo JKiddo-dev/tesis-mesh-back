@@ -19,31 +19,30 @@ export class AuthController {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles('Admin')
+  @Roles('Admin', 'Operador')
   @Get('users')
   async getUsers() {
     return this.authService.obtenerUsuarios();
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles('Admin')
+  @Roles('Admin', 'Operador')
   @Post('users')
   async createUser(@Body() body: any) {
     return this.authService.crearUsuario(body);
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles('Admin')
+  @Roles('Admin', 'Operador')
   @Patch('users/:id')
   async updateUser(@Param('id') id: string, @Body() body: any) {
     return this.authService.actualizarUsuario(id, body);
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles('Admin')
+  @Roles('Admin', 'Operador')
   @Delete('users/:id')
   async deleteUser(@Param('id') id: string) {
     return this.authService.eliminarUsuario(id);
   }
-  
 }

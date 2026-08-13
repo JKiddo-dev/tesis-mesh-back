@@ -12,13 +12,14 @@ describe('AuthService', () => {
   let mockJwtService: any;
 
   beforeEach(async () => {
-    mockUserModel = {
-      findOne: jest.fn(),
-      find: jest.fn(),
-      findByIdAndUpdate: jest.fn(),
-      findByIdAndDelete: jest.fn(),
-      save: jest.fn(),
-    };
+    mockUserModel = jest.fn().mockImplementation((dto) => ({
+      ...dto,
+      save: jest.fn().mockResolvedValue({ _id: 'user_created', ...dto }),
+    }));
+    mockUserModel.findOne = jest.fn();
+    mockUserModel.find = jest.fn();
+    mockUserModel.findByIdAndUpdate = jest.fn();
+    mockUserModel.findByIdAndDelete = jest.fn();
 
     mockJwtService = {
       sign: jest.fn().mockReturnValue('mock_token'),
@@ -65,15 +66,16 @@ describe('AuthService', () => {
       );
     });
 
-    it('should return token and user object on successful login', async () => {
+    it('should return token, user object with role and nodoId on successful login', async () => {
       const passwordHash = await bcrypt.hash('secret123', 10);
       const user = {
         _id: 'user_123',
         nombre: 'Juan Perez',
         email: 'juan@example.com',
         passwordHash,
-        rol: 'Admin',
+        rol: 'Usuario',
         estado: 'Activo',
+        nodoId: 'node_abc',
       };
 
       mockUserModel.findOne.mockReturnValue(user);
@@ -85,7 +87,8 @@ describe('AuthService', () => {
         id: 'user_123',
         nombre: 'Juan Perez',
         email: 'juan@example.com',
-        rol: 'Admin',
+        rol: 'Usuario',
+        nodoId: 'node_abc',
       });
     });
   });
@@ -93,7 +96,9 @@ describe('AuthService', () => {
   describe('obtenerUsuarios', () => {
     it('should return all users without password hash', async () => {
       const mockResult = [
-        { _id: '1', nombre: 'Admin', email: 'admin@mesh.com' },
+        { _id: '1', nombre: 'Admin', email: 'admin@mesh.com', rol: 'Admin', nodoId: null },
+        { _id: '2', nombre: 'Operador', email: 'op@mesh.com', rol: 'Operador', nodoId: 'node_123' },
+        { _id: '3', nombre: 'Usuario', email: 'user@mesh.com', rol: 'Usuario', nodoId: null },
       ];
       mockUserModel.find.mockReturnValue({
         select: jest.fn().mockReturnValue({
@@ -103,6 +108,41 @@ describe('AuthService', () => {
 
       const users = await service.obtenerUsuarios();
       expect(users).toEqual(mockResult);
+    });
+  });
+
+  describe('crearUsuario', () => {
+    it('should create user with assigned node and default role Usuario if not provided', async () => {
+      const userData = {
+        nombre: 'Test User',
+        email: 'test@user.cl',
+        password: 'password123',
+        nodoId: 'node_999'
+      };
+
+      const user = await service.crearUsuario(userData);
+      expect(user).toBeDefined();
+      expect(user.nombre).toBe('Test User');
+      expect(user.rol).toBe('Usuario');
+      expect(user.nodoId).toBe('node_999');
+    });
+  });
+
+  describe('actualizarUsuario', () => {
+    it('should update user fields including assigned radio node', async () => {
+      const updateData = { nodoId: 'node_555', rol: 'Operador' };
+      mockUserModel.findByIdAndUpdate.mockReturnValue({
+        select: jest.fn().mockResolvedValue({
+          _id: 'user_1',
+          nombre: 'Updated',
+          rol: 'Operador',
+          nodoId: 'node_555'
+        }),
+      });
+
+      const result = await service.actualizarUsuario('user_1', updateData);
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith('user_1', updateData, { new: true });
+      expect(result.nodoId).toBe('node_555');
     });
   });
 });

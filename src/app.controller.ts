@@ -64,7 +64,8 @@ export class AppController implements OnModuleInit {
     });
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('Admin', 'Operador')
   @Get('settings')
   async getSettings() {
     let config = await this.settingsModel.findOne().exec();
@@ -118,7 +119,8 @@ export class AppController implements OnModuleInit {
     } catch (error) { return []; }
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('Admin', 'Operador')
   @Delete('telemetry/nodes/:id')
   async deleteNode(@Param('id') id: string) {
     try {
@@ -127,7 +129,8 @@ export class AppController implements OnModuleInit {
     } catch (error) { return { exito: false, error: 'Error BD' }; }
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('Admin', 'Operador')
   @Delete('telemetry/clear-all')
   async clearAllData() {
     try {
@@ -136,7 +139,8 @@ export class AppController implements OnModuleInit {
     } catch (error) { return { exito: false, error: 'Error BD' }; }
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('Admin', 'Operador')
   @Get('telemetry/analytics')
   async getAnalytics() {
     try {

@@ -14,11 +14,14 @@ export class User {
   @Prop({ required: true })
   passwordHash!: string;
 
-  @Prop({ required: true, default: 'Operador', enum: ['Admin', 'Operador'] })
+  @Prop({ required: true, default: 'Usuario', enum: ['Admin', 'Operador', 'Usuario'] })
   rol?: string;
 
   @Prop({ required: true, default: 'Activo', enum: ['Activo', 'Inactivo'] })
   estado?: string;
+
+  @Prop({ required: false, default: null })
+  nodoId?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

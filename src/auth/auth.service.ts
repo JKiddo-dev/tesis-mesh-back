@@ -21,11 +21,23 @@ export class AuthService {
     const isMatch = await bcrypt.compare(pass, user.passwordHash);
     if (!isMatch) throw new UnauthorizedException('Credenciales inválidas');
 
-    const payload = { sub: user._id, email: user.email, rol: user.rol, nombre: user.nombre };
+    const payload = { 
+      sub: user._id, 
+      email: user.email, 
+      rol: user.rol, 
+      nombre: user.nombre,
+      nodoId: user.nodoId || null 
+    };
     
     return {
       access_token: this.jwtService.sign(payload),
-      user: { id: user._id, nombre: user.nombre, email: user.email, rol: user.rol }
+      user: { 
+        id: user._id, 
+        nombre: user.nombre, 
+        email: user.email, 
+        rol: user.rol,
+        nodoId: user.nodoId || null
+      }
     };
   }
 
@@ -38,7 +50,8 @@ export class AuthService {
       email: data.email,
       passwordHash: hash,
       rol: data.rol || 'Admin',
-      estado: 'Activo'
+      estado: 'Activo',
+      nodoId: data.nodoId || null
     });
     
     return newUser.save();
@@ -56,8 +69,9 @@ export class AuthService {
       nombre: data.nombre,
       email: data.email,
       passwordHash: hash,
-      rol: data.rol,
-      estado: data.estado || 'Activo'
+      rol: data.rol || 'Usuario',
+      estado: data.estado || 'Activo',
+      nodoId: data.nodoId || null
     });
     
     return newUser.save();
@@ -78,6 +92,4 @@ export class AuthService {
   async eliminarUsuario(id: string) {
     return this.userModel.findByIdAndDelete(id);
   }
-
-
 }
