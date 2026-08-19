@@ -8,6 +8,9 @@ export class Telemetry {
   @Prop({ required: true })
   nodoId!: string; 
 
+  @Prop({ required: false, default: null })
+  nodoDestino?: string;
+
   @Prop({ required: true })
   tipoPaquete!: string;
 
@@ -22,7 +25,6 @@ export class Telemetry {
 
   @Prop({ type: Object })
   metadatos?: Record<string, any>;
-
 }
 
 export const TelemetrySchema = SchemaFactory.createForClass(Telemetry);

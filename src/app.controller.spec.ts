@@ -12,23 +12,26 @@ describe('AppController', () => {
   let mockEventosGateway: any;
 
   beforeEach(async () => {
-    mockTelemetryModel = {
-      distinct: jest.fn().mockReturnValue({
-        exec: jest.fn().mockResolvedValue(['node_1', 'node_2']),
-      }),
-      find: jest.fn().mockReturnValue({
-        sort: jest.fn().mockReturnValue({
+    mockTelemetryModel = jest.fn().mockImplementation((dto) => ({
+      ...dto,
+      save: jest.fn().mockResolvedValue({ _id: 'tel_123', ...dto }),
+    }));
+    mockTelemetryModel.distinct = jest.fn().mockReturnValue({
+      exec: jest.fn().mockResolvedValue(['node_1', 'node_2']),
+    });
+    mockTelemetryModel.find = jest.fn().mockReturnValue({
+      sort: jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([]),
+        limit: jest.fn().mockReturnValue({
           exec: jest.fn().mockResolvedValue([]),
-          limit: jest.fn().mockReturnValue({
-            exec: jest.fn().mockResolvedValue([]),
-          }),
         }),
       }),
-      deleteMany: jest.fn().mockReturnValue({
-        exec: jest.fn().mockResolvedValue({ deletedCount: 5 }),
-      }),
-      aggregate: jest.fn().mockResolvedValue([]),
-    };
+    });
+    mockTelemetryModel.deleteMany = jest.fn().mockReturnValue({
+      exec: jest.fn().mockResolvedValue({ deletedCount: 5 }),
+    });
+    mockTelemetryModel.aggregate = jest.fn().mockResolvedValue([]);
+    mockTelemetryModel.create = jest.fn().mockImplementation((dto) => Promise.resolve({ _id: 'tel_123', ...dto }));
 
     mockSettingsModel = {
       findOne: jest.fn().mockReturnValue({
@@ -47,6 +50,7 @@ describe('AppController', () => {
       server: {
         emit: jest.fn(),
       },
+      emitirMensajeMesh: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -79,6 +83,26 @@ describe('AppController', () => {
       const nodes = await controller.getActiveNodes();
       expect(nodes).toEqual(['node_1', 'node_2']);
       expect(mockTelemetryModel.distinct).toHaveBeenCalledWith('nodoId');
+    });
+  });
+
+  describe('getDirectMessages', () => {
+    it('should return array of messages between two nodes', async () => {
+      const messages = await controller.getDirectMessages('node_1', 'node_2');
+      expect(mockTelemetryModel.find).toHaveBeenCalled();
+      expect(messages).toEqual([]);
+    });
+  });
+
+  describe('enviarMensajeMesh', () => {
+    it('should create message in DB and emit socket event', async () => {
+      const res = await controller.enviarMensajeMesh({
+        mensaje: 'Alerta de prueba',
+        nodoDestino: 'node_2',
+      });
+      expect(res.exito).toBe(true);
+      expect(mockTelemetryModel.create).toHaveBeenCalled();
+      expect(mockEventosGateway.emitirMensajeMesh).toHaveBeenCalled();
     });
   });
 

@@ -1,4 +1,4 @@
-import { Controller, Get, Delete, Param, Post, Body, UseGuards, Put, OnModuleInit } from '@nestjs/common';
+import { Controller, Get, Delete, Param, Post, Body, UseGuards, Put, OnModuleInit, Req } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { EventosGateway } from './events/events.gateway'; 
@@ -53,6 +53,10 @@ export class AppController implements OnModuleInit {
       this.mqttClient?.subscribe(topic, (err) => {
         if (err) console.error('[MQTT] Error al suscribirse:', err);
       });
+      if (!topic.includes('#') && !topic.includes('+')) {
+        const wildcardTopic = topic.endsWith('/') ? `${topic}#` : `${topic}/#`;
+        this.mqttClient?.subscribe(wildcardTopic);
+      }
     });
 
     this.mqttClient.on('message', (incomingTopic, messageBuffer) => {
@@ -74,7 +78,7 @@ export class AppController implements OnModuleInit {
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles('Admin') // Solo administradores pueden modificar la configuración de la red
+  @Roles('Admin')
   @Put('settings')
   async updateSettings(@Body() body: Partial<Settings>) {
     let config = await this.settingsModel.findOne().exec();
@@ -114,9 +118,31 @@ export class AppController implements OnModuleInit {
   @Get('telemetry/messages')
   async getMessagesHistory() {
     try {
-      const msjs = await this.telemetryModel.find().sort({ createdAt: -1 }).limit(50).exec();
+      const msjs = await this.telemetryModel.find().sort({ createdAt: -1 }).limit(100).exec();
       return msjs.reverse();
     } catch (error) { return []; }
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Get('telemetry/direct/:nodoId1/:nodoId2')
+  async getDirectMessages(
+    @Param('nodoId1') nodoId1: string,
+    @Param('nodoId2') nodoId2: string
+  ) {
+    try {
+      const msjs = await this.telemetryModel.find({
+        tipoPaquete: { $in: ['TEXTO', 'sendtext'] },
+        $or: [
+          { nodoId: nodoId1, nodoDestino: nodoId2 },
+          { nodoId: nodoId2, nodoDestino: nodoId1 },
+          { nodoId: nodoId1, nodoDestino: { $in: [null, 'BROADCAST', '4294967295', ''] } },
+          { nodoId: nodoId2, nodoDestino: { $in: [null, 'BROADCAST', '4294967295', ''] } }
+        ]
+      }).sort({ createdAt: 1 }).limit(150).exec();
+      return msjs;
+    } catch (error) {
+      return [];
+    }
   }
 
   @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -160,27 +186,53 @@ export class AppController implements OnModuleInit {
     } catch (error) { return { error: 'Error BD' }; }
   }
   
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('Admin', 'Operador')
   @Post('telemetry/send')
-  async enviarMensajeMesh(@Body() body: { mensaje: string, nodoDestino?: string }) {
+  async enviarMensajeMesh(@Body() body: { mensaje: string, nodoDestino?: string, nodoOrigen?: string }) {
     try {
-      if (!this.mqttClient || !this.mqttClient.connected) {
-        return { exito: false, error: 'No hay conexión activa con el broker MQTT' };
+      const remitente = body.nodoOrigen || '1234567890';
+      const destinatario = body.nodoDestino || 'BROADCAST';
+      
+      let toNumeric = 4294967295;
+      if (body.nodoDestino && body.nodoDestino !== 'BROADCAST') {
+        if (body.nodoDestino.startsWith('!')) {
+          const hex = body.nodoDestino.replace('!', '');
+          const parsed = parseInt(hex, 16);
+          toNumeric = isNaN(parsed) ? 4294967295 : parsed;
+        } else {
+          const parsed = parseInt(body.nodoDestino, 10);
+          toNumeric = isNaN(parsed) ? 4294967295 : parsed;
+        }
       }
 
       const payloadMeshtastic = {
         type: "sendtext",
         payload: body.mensaje,
-        to: body.nodoDestino ? parseInt(body.nodoDestino) : 4294967295, 
-        from: 1234567890, 
+        to: toNumeric,
+        toStr: destinatario,
+        from: remitente,
         channel: 0 
       };
 
-      const topicoEnvio = this.topicoActual.replace('/#', '');
-      this.mqttClient.publish(topicoEnvio, JSON.stringify(payloadMeshtastic));
+      const nuevoMensaje = await this.telemetryModel.create({
+        nodoId: remitente,
+        nodoDestino: destinatario,
+        tipoPaquete: 'TEXTO',
+        mensajeTexto: body.mensaje,
+        metadatos: payloadMeshtastic,
+      });
+
+      const topicoEnvio = this.topicoActual ? this.topicoActual.replace('/#', '').replace('/+', '') : 'msh/prueba/2/json';
       
-      console.log(`[MQTT] Mensaje inyectado al tópico ${topicoEnvio}`);
-      return { exito: true, mensaje: "Mensaje publicado" };
+      if (this.mqttClient && this.mqttClient.connected) {
+        this.mqttClient.publish(topicoEnvio, JSON.stringify(payloadMeshtastic));
+        console.log(`[MQTT] Mensaje 1-a-1 enviado hacia ${destinatario} en tópico ${topicoEnvio}`);
+      }
+
+      this.eventosGateway.emitirMensajeMesh(topicoEnvio, nuevoMensaje);
+
+      return { exito: true, mensaje: "Mensaje publicado y registrado", data: nuevoMensaje };
       
     } catch (error) {
       return { exito: false, error: 'No se pudo enviar el mensaje' };
@@ -189,10 +241,28 @@ export class AppController implements OnModuleInit {
 
   async handleMeshtasticTraffic(topic: string, data: Buffer) { 
     try {
-      if (topic.includes('/e/') || topic.includes('/c/')) return; 
+      let nodoDestinoExtraido: string | undefined;
+      
+      const partesTopico = topic.split('/');
+      const ultimaParte = partesTopico[partesTopico.length - 1];
+      if (ultimaParte && (ultimaParte.startsWith('!') || !isNaN(Number(ultimaParte)))) {
+        nodoDestinoExtraido = ultimaParte;
+      }
 
       const stringData = data.toString();
-      const payloadParaFrontend = JSON.parse(stringData);
+      let payloadParaFrontend: any = null;
+
+      try {
+        payloadParaFrontend = JSON.parse(stringData);
+      } catch (e) {
+        if (topic.includes('/e/') || topic.includes('/text')) {
+          payloadParaFrontend = {
+            type: 'text',
+            payload: { text: stringData },
+            sender: 'Radio-' + (partesTopico[partesTopico.length - 2] || 'Mesh')
+          };
+        }
+      }
 
       if (payloadParaFrontend) {
         const rawType = payloadParaFrontend.type || (payloadParaFrontend.decoded?.portnum) || 'unknown';
@@ -208,7 +278,7 @@ export class AppController implements OnModuleInit {
           mensajeTexto = payloadParaFrontend.payload?.text || (typeof payloadParaFrontend.payload === 'string' ? payloadParaFrontend.payload : undefined);
         } else if (rawTypeLower === 'sendtext') {
           tipoPaquete = 'TEXTO'; 
-          mensajeTexto = payloadParaFrontend.payload;
+          mensajeTexto = typeof payloadParaFrontend.payload === 'string' ? payloadParaFrontend.payload : payloadParaFrontend.payload?.text;
         } else if (rawTypeLower === 'position' || rawType === 'POSITION_APP' || rawType == 3) {
           tipoPaquete = 'POSICION';
           if (payloadParaFrontend.payload?.latitude_i) {
@@ -221,8 +291,12 @@ export class AppController implements OnModuleInit {
           tipoPaquete = 'NODEINFO'; 
         }
 
+        const nodoId = payloadParaFrontend.sender || payloadParaFrontend.fromStr || String(payloadParaFrontend.from) || 'Desconocido';
+        const nodoDestino = payloadParaFrontend.toStr || (payloadParaFrontend.to ? String(payloadParaFrontend.to) : undefined) || nodoDestinoExtraido || 'BROADCAST';
+
         const nuevaTelemetria = await this.telemetryModel.create({
-          nodoId: payloadParaFrontend.sender || payloadParaFrontend.fromStr || String(payloadParaFrontend.from) || 'Desconocido',
+          nodoId,
+          nodoDestino,
           tipoPaquete,
           latitud,
           longitud,
@@ -233,6 +307,7 @@ export class AppController implements OnModuleInit {
         this.eventosGateway.emitirMensajeMesh(topic, nuevaTelemetria);
       }
     } catch (error) {
+      console.error('[MQTT Traffic Parse Error]', error);
     }
   }
 }
